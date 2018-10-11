@@ -302,8 +302,10 @@ end
     @test tc[] == 0
     yield() # consume event
     @test tc[] == 1
-    sleep(0.1) # no further events
-    @test tc[] == 1
+    # NOTE: this depended on the scheduler not calling process_events when there
+    # are tasks to run. Now, this is probabilistic.
+    #sleep(0.1) # no further events
+    #@test tc[] == 1
     ccall(:uv_async_send, Cvoid, (Ptr{Cvoid},), async)
     ccall(:uv_async_send, Cvoid, (Ptr{Cvoid},), async)
     close(async)
