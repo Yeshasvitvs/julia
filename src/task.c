@@ -194,38 +194,6 @@ static void JL_NORETURN finish_task(jl_task_t *t, jl_value_t *resultval JL_MAYBE
     gc_debug_critical_error();
     abort();
 }
-
-void NOINLINE JL_NORETURN start_task(void)
-{
-    // this runs the first time we switch to a task
-    jl_ptls_t ptls = jl_get_ptls_states();
-    jl_task_t *t = ptls->current_task;
-    jl_value_t *res;
-    t->started = 1;
-    if (t->exception != jl_nothing) {
-        record_backtrace();
-        res = t->exception;
-    }
-    else {
-        JL_TRY {
-            if (ptls->defer_signal) {
-                ptls->defer_signal = 0;
-                jl_sigint_safepoint(ptls);
-            }
-            JL_TIMING(ROOT);
-            ptls->world_age = jl_world_counter;
-            res = jl_apply(&t->start, 1);
-        }
-        JL_CATCH {
-            res = jl_exception_in_transit;
-            t->exception = res;
-            jl_gc_wb(t, res);
-        }
-    }
-    finish_task(t, res);
-    gc_debug_critical_error();
-    abort();
-}
 #endif // JULIA_ENABLE_PARTR
 
 JL_DLLEXPORT void *jl_task_stack_buffer(jl_task_t *task, size_t *size, int *tid)
@@ -453,11 +421,6 @@ JL_DLLEXPORT void jl_rethrow_other(jl_value_t *e)
 }
 
 #ifndef JULIA_ENABLE_PARTR
-JL_DLLEXPORT jl_task_t *jl_task_new(jl_function_t *start, size_t ssize)
-{
-    return jl_new_task(start, ssize);
-}
-
 JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, size_t ssize)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
@@ -594,6 +557,40 @@ void jl_init_tasks(void) JL_GC_DISABLED
     failed_sym = jl_symbol("failed");
     runnable_sym = jl_symbol("runnable");
 }
+
+#ifndef JULIA_ENABLE_PARTR
+void NOINLINE JL_NORETURN start_task(void)
+{
+    // this runs the first time we switch to a task
+    jl_ptls_t ptls = jl_get_ptls_states();
+    jl_task_t *t = ptls->current_task;
+    jl_value_t *res;
+    t->started = 1;
+    if (t->exception != jl_nothing) {
+        record_backtrace();
+        res = t->exception;
+    }
+    else {
+        JL_TRY {
+            if (ptls->defer_signal) {
+                ptls->defer_signal = 0;
+                jl_sigint_safepoint(ptls);
+            }
+            JL_TIMING(ROOT);
+            ptls->world_age = jl_world_counter;
+            res = jl_apply(&t->start, 1);
+        }
+        JL_CATCH {
+            res = jl_exception_in_transit;
+            t->exception = res;
+            jl_gc_wb(t, res);
+        }
+    }
+    finish_task(t, res);
+    gc_debug_critical_error();
+    abort();
+}
+#endif /* JULIA_ENABLE_PARTR */
 
 #if defined(JL_HAVE_UCONTEXT)
 #ifdef _OS_WINDOWS_

@@ -15,16 +15,15 @@ notify(c::Condition, arg, all, error) = ccall(:jl_task_notify, Cvoid, (Ref{Condi
 notify(c::Condition, @nospecialize(arg = nothing); all=true, error=false) = notify(c, arg, all, error)
 notify_error(c::Condition, err) = notify(c, err, true, true)
 
-"""
-    isempty(condition)
-
-Return `true` if no tasks are waiting on the condition, `false` otherwise.
-"""
 isempty(c::Condition) = ccall(:jl_condition_isempty, Cint, (Ref{Condition},), c) == 1
 
-schedule(t::Task, @nospecialize(arg = nothing); error=false, unyielding=false) =
+schedule(t::Task, @nospecialize(arg = nothing); error=false) =
     ccall(:jl_task_spawn, Ref{Task}, (Ref{Task},Any,Int8,Int8,Int8,Int8),
-          t, arg, error, unyielding, 0, 0)
+          t, arg, error, false, 0, 0)
+
+unyielding_schedule(t::Task, @nospecialize(arg = nothing); error=false) =
+    ccall(:jl_task_spawn, Ref{Task}, (Ref{Task},Any,Int8,Int8,Int8,Int8),
+          t, arg, error, true, 0, 0)
 
 fetch(t::Task) = ccall(:jl_task_sync, Any, (Ref{Task},), t)
 
@@ -79,6 +78,8 @@ end
 
 notify_error(c::Condition, err) = notify(c, err, true, true)
 
+isempty(c::Condition) = isempty(c.waitq)
+
 n_waiters(c::Condition) = length(c.waitq)
 
 ## scheduler and work queue
@@ -104,6 +105,9 @@ function schedule(t::Task, arg; error=false)
     end
     return enq_work(t)
 end
+
+unyielding_schedule(t::Task, @nospecialize(arg = nothing); error=false) =
+    schedule(t, arg, error=error)
 
 yield() = (enq_work(current_task()); wait())
 
@@ -200,6 +204,13 @@ function wait()
 end
 
 end # JULIA_PARTR
+
+"""
+    isempty(condition)
+
+Return `true` if no tasks are waiting on the condition, `false` otherwise.
+"""
+isempty(c::Condition)
 
 """
     Condition()

@@ -986,9 +986,6 @@ static inline int jl_is_layout_opaque(const jl_datatype_layout_t *l) JL_NOTSAFEP
 #define jl_is_module(v)      jl_typeis(v,jl_module_type)
 #define jl_is_mtable(v)      jl_typeis(v,jl_methtable_type)
 #define jl_is_task(v)        jl_typeis(v,jl_task_type)
-#ifdef JULIA_ENABLE_PARTR
-#define jl_is_condition(v)   jl_typeis(v,jl_condition_type)
-#endif
 #define jl_is_string(v)      jl_typeis(v,jl_string_type)
 #define jl_is_cpointer(v)    jl_is_cpointer_type(jl_typeof(v))
 #define jl_is_pointer(v)     jl_is_cpointer_type(jl_typeof(v))
@@ -1744,9 +1741,10 @@ struct _jl_task_t {
 };
 #endif // JULIA_ENABLE_THREADING && JULIA_ENABLE_PARTR
 
+JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, size_t ssize);
+
 #ifdef JULIA_ENABLE_PARTR
 
-JL_DLLEXPORT jl_task_t *jl_task_new(jl_value_t *args, size_t ssize);
 JL_DLLEXPORT jl_task_t *jl_task_spawn(jl_task_t *task, jl_value_t *arg, int8_t err,
                                       int8_t unyielding, int8_t sticky, int8_t detach);
 JL_DLLEXPORT jl_task_t *jl_task_new_multi(jl_value_t *args, size_t ssize,
@@ -1765,8 +1763,6 @@ JL_DLLEXPORT void JL_NORETURN jl_no_exc_handler(jl_value_t *e);
 
 #else // JULIA_ENABLE_PARTR
 
-JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, size_t ssize);
-JL_DLLEXPORT jl_task_t *jl_task_new(jl_function_t *start, size_t ssize);
 JL_DLLEXPORT void jl_switchto(jl_task_t **pt);
 JL_DLLEXPORT void JL_NORETURN jl_throw(jl_value_t *e JL_MAYBE_UNROOTED);
 JL_DLLEXPORT void JL_NORETURN jl_rethrow(void);

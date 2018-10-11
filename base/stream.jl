@@ -278,15 +278,9 @@ function wait_readbyte(x::LibuvStream, c::UInt8)
             wait(x.readnotify)
         end
     finally
-        @static if JULIA_PARTR
-            if isempty(x.readnotify)
-                stop_reading(x) # stop reading iff there are currently no other read clients of the stream
-            end
-        else # !JULIA_PARTR
-            if isempty(x.readnotify.waitq)
-                stop_reading(x) # stop reading iff there are currently no other read clients of the stream
-            end
-        end # !JULIA_PARTR
+        if isempty(x.readnotify)
+            stop_reading(x) # stop reading iff there are currently no other read clients of the stream
+        end
         unpreserve_handle(x)
     end
     nothing
@@ -307,15 +301,9 @@ function wait_readnb(x::LibuvStream, nb::Int)
             wait(x.readnotify)
         end
     finally
-        @static if JULIA_PARTR
-            if isempty(x.readnotify)
-                stop_reading(x) # stop reading iff there are currently no other read clients of the stream
-            end
-        else # !JULIA_PARTR
-            if isempty(x.readnotify.waitq)
-                stop_reading(x) # stop reading iff there are currently no other read clients of the stream
-            end
-        end # !JULIA_PARTR
+        if isempty(x.readnotify)
+            stop_reading(x) # stop reading iff there are currently no other read clients of the stream
+        end
         if oldthrottle <= x.throttle <= nb
             x.throttle = oldthrottle
         end
@@ -719,15 +707,9 @@ function readbytes!(s::LibuvStream, a::Vector{UInt8}, nb::Int)
             return bytesavailable(newbuf)
         finally
             s.buffer = sbuf
-            @static if JULIA_PARTR
-                if !isempty(s.readnotify)
-                    start_reading(s) # resume reading iff there are currently other read clients of the stream
-                end
-            else # !JULIA_PARTR
-                if !isempty(s.readnotify.waitq)
-                    start_reading(s) # resume reading iff there are currently other read clients of the stream
-                end
-            end # !JULIA_PARTR
+            if !isempty(s.readnotify)
+                start_reading(s) # resume reading iff there are currently other read clients of the stream
+            end
         end
     end
     @assert false # unreachable
@@ -761,15 +743,9 @@ function unsafe_read(s::LibuvStream, p::Ptr{UInt8}, nb::UInt)
             nb == bytesavailable(newbuf) || throw(EOFError())
         finally
             s.buffer = sbuf
-            @static if JULIA_PARTR
-                if !isempty(s.readnotify)
-                    start_reading(s) # resume reading iff there are currently other read clients of the stream
-                end
-            else # !JULIA_PARTR
-                if !isempty(s.readnotify.waitq)
-                    start_reading(s) # resume reading iff there are currently other read clients of the stream
-                end
-            end # !JULIA_PARTR
+            if !isempty(s.readnotify)
+                start_reading(s) # resume reading iff there are currently other read clients of the stream
+            end
         end
     end
     nothing
@@ -900,8 +876,6 @@ function write(s::LibuvStream, b::UInt8)
     return write(s, Ref{UInt8}(b))
 end
 
-if JULIA_PARTR
-
 function uv_writecb_task(req::Ptr{Cvoid}, status::Cint)
     d = uv_req_data(req)
     if d != C_NULL
@@ -909,9 +883,9 @@ function uv_writecb_task(req::Ptr{Cvoid}, status::Cint)
         t = unsafe_pointer_to_objref(d)::Task
         if status < 0
             err = _UVError("write", status)
-            schedule(t, err, error=true, unyielding=true)
+            unyielding_schedule(t, err, error=true)
         else
-            schedule(t, unyielding=true)
+            unyielding_schedule(t)
         end
     else
         # no owner for this req, safe to just free it
@@ -919,28 +893,6 @@ function uv_writecb_task(req::Ptr{Cvoid}, status::Cint)
     end
     nothing
 end
-
-else # !JULIA_PARTR
-
-function uv_writecb_task(req::Ptr{Cvoid}, status::Cint)
-    d = uv_req_data(req)
-    if d != C_NULL
-        uv_req_set_data(req, C_NULL) # let the Task know we got the writecb
-        t = unsafe_pointer_to_objref(d)::Task
-        if status < 0
-            err = _UVError("write", status)
-            schedule(t, err, error=true)
-        else
-            schedule(t)
-        end
-    else
-        # no owner for this req, safe to just free it
-        Libc.free(req)
-    end
-    nothing
-end
-
-end # JULIA_PARTR
 
 _fd(x::IOStream) = RawFD(fd(x))
 

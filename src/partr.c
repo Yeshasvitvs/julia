@@ -821,11 +821,11 @@ static void init_task(jl_task_t *task, size_t ssize)
 }
 
 
-/*  jl_task_new() -- create a task for `f(arg)`
+/*  jl_new_task() -- create a task for `f(arg)`
 
     The created task can then be spawned.
  */
-JL_DLLEXPORT jl_task_t *jl_task_new(jl_function_t *_taskentry, size_t ssize)
+JL_DLLEXPORT jl_task_t *jl_new_task(jl_function_t *_taskentry, size_t ssize)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
 
