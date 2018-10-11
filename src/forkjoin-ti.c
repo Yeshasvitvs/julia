@@ -67,6 +67,7 @@ static ti_threadwork_t threadwork;
 // only one thread group for now
 static ti_threadgroup_t *tgworld;
 
+extern uint64_t jl_thread_sleep_threshold;
 
 // threadgroup functions
 // ---
