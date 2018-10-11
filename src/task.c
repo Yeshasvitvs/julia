@@ -233,7 +233,6 @@ JL_DLLEXPORT void julia_init(JL_IMAGE_SEARCH rel)
 
 void jl_release_task_stack(jl_ptls_t ptls, jl_task_t *task);
 
-#ifndef JULIA_ENABLE_PARTR
 static void ctx_switch(jl_ptls_t ptls, jl_task_t **pt)
 {
     jl_task_t *t = *pt;
@@ -296,6 +295,11 @@ static void ctx_switch(jl_ptls_t ptls, jl_task_t **pt)
     ptls->world_age = t->world_age;
     t->gcstack = NULL;
     ptls->current_task = t;
+#ifdef JULIA_ENABLE_PARTR
+    if (!lastt->copy_stack)
+        lastt->current_tid = -1;
+    t->current_tid = ptls->tid;
+#endif
 
     jl_ucontext_t *lastt_ctx = (killed ? NULL : &lastt->ctx);
 #ifdef COPY_STACKS
@@ -357,7 +361,6 @@ JL_DLLEXPORT void jl_switchto(jl_task_t **pt)
     if (other_defer_signal && !defer_signal)
         jl_sigint_safepoint(ptls);
 }
-#endif // !JULIA_ENABLE_PARTR
 
 jl_timing_block_t *jl_pop_timing_block(jl_timing_block_t *cur_block);
 

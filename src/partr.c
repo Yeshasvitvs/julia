@@ -29,20 +29,14 @@ extern "C" {
 #define MINSTKSZ 131072
 #endif
 
-// task states
+// task states and stack switching
 extern jl_sym_t *done_sym;
 extern jl_sym_t *failed_sym;
 extern jl_sym_t *runnable_sym;
+extern void jl_switchto(jl_task_t **pt);
 
 // the lovely task-done-hook hack
 extern jl_function_t *task_done_hook_func;
-
-// task/stack switch functions used
-extern char *jl_alloc_fiber(jl_ucontext_t *t, size_t *ssize, jl_task_t *owner);
-extern void jl_set_fiber(jl_ucontext_t *t);
-extern void jl_start_fiber(jl_ucontext_t *lastt, jl_ucontext_t *t);
-extern void jl_swap_fiber(jl_ucontext_t *lastt, jl_ucontext_t *t);
-extern void jl_release_task_stack(jl_ptls_t ptls, jl_task_t *task);
 
 // GC functions used
 extern int jl_gc_mark_queue_obj_explicit(jl_gc_mark_cache_t *gc_cache,
@@ -459,9 +453,12 @@ void jl_threadfun(void *arg)
     // free the thread argument here
     free(targ);
 
-    /* run loop: get the highest priority task and run it */
-    while (run_next())
-        ;
+    //jl_current_task->state = done_sym;
+    run_next();
+
+    // shouldn't get here
+    gc_debug_critical_error();
+    abort();
 }
 
 
@@ -608,6 +605,9 @@ void NOINLINE JL_NORETURN start_task(void)
 
     task->state = new_state;
 
+    if (task->copy_stack) // early free of stack
+        task->stkbuf = NULL;
+
     /* clear thread state */
     ptls->in_finalizer = 0;
     ptls->in_pure_callback = 0;
@@ -671,10 +671,12 @@ static jl_task_t *get_next_task(void)
 
 
 // run the next available task
+// TODO: deal with the case where another thread gets the task from which a thread is
+// still trying to switch away
 static int run_next(void)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
-    jl_task_t *task = NULL, *lastt = ptls->current_task;
+    jl_task_t *task = NULL;
 
     uint64_t spin_ns, spin_start = 0;
     while (!task) {
@@ -716,55 +718,7 @@ static int run_next(void)
         }
     }
 
-    if (task == lastt)
-        return 1;
-
-    // may need to allocate the task's stack
-    int started = (task->stkbuf != NULL);
-    if (!started)
-        task->stkbuf = jl_alloc_fiber(&task->ctx, &task->bufsz, task);
-
-    sig_atomic_t defer_signal = ptls->defer_signal;
-    int8_t gc_state = jl_gc_unsafe_enter(ptls);
-
-    jl_ucontext_t *lastt_ctx = NULL;
-    int killed = (lastt->state == done_sym || lastt->state == failed_sym);
-    if (killed) {
-        lastt->gcstack = NULL;
-        if (lastt->stkbuf)
-            jl_release_task_stack(ptls, lastt);
-    }
-    else {
-        lastt_ctx = &lastt->ctx;
-        lastt->current_tid = -1;
-        lastt->gcstack = ptls->pgcstack;
-        lastt->world_age = ptls->world_age;
-    }
-
-    // set up global state for new task
-    ptls->pgcstack = task->gcstack;
-    ptls->world_age = task->world_age;
-    task->gcstack = NULL;
-    ptls->current_task = task;
-    task->current_tid = ptls->tid;
-
-    if (!started)
-        jl_start_fiber(lastt_ctx, &task->ctx);
-    else {
-        if (killed)
-            jl_set_fiber(&task->ctx);
-        else
-            jl_swap_fiber(lastt_ctx, &task->ctx);
-    }
-
-    jl_gc_unsafe_leave(ptls, gc_state);
-    sig_atomic_t other_defer_signal = ptls->defer_signal;
-    if (other_defer_signal  &&  !defer_signal)
-        jl_sigint_safepoint(ptls);
-
-    // TODO: add support for allowing any thread to run the event loop
-    // if (ptls->tid == 0)
-    //    jl_process_events(jl_global_event_loop());
+    jl_switchto(&task);
 
     return 1;
 }
@@ -792,8 +746,14 @@ static void init_task(jl_task_t *task, size_t ssize)
 
     task->stkbuf = NULL;
     task->copy_stack = 0;
-    if (ssize == 0)
+    if (ssize == 0) {
+#ifdef COPY_STACKS
+        task->copy_stack = 1;
+        task->bufsz = 0;
+#else
         task->bufsz = JL_STACK_SIZE;
+#endif
+    }
     else {
         if (ssize < MINSTKSZ)
             ssize = MINSTKSZ;
@@ -802,6 +762,10 @@ static void init_task(jl_task_t *task, size_t ssize)
 #if defined(JL_DEBUG_BUILD)
     if (!task->copy_stack)
         memset(&task->ctx, 0, sizeof(task->ctx));
+#endif
+#ifdef COPY_STACKS
+    if (task->copy_stack)
+        memcpy(&task->ctx, &ptls->base_ctx, sizeof(task->ctx));
 #endif
 
     arraylist_new(&task->locks, 0);
@@ -1059,51 +1023,11 @@ JL_DLLEXPORT jl_value_t *jl_task_yield(int requeue)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
 
-    if (ptls->in_finalizer)
-        jl_error("task switch not allowed from inside gc finalizer");
-    if (ptls->in_pure_callback)
-        jl_error("task switch not allowed from inside staged nor pure functions");
-
-#ifdef ENABLE_TIMINGS
-    jl_timing_block_t *blk = NULL;
-#endif
-
-    jl_task_t *ytask = ptls->current_task;
-    if (ytask) {
-#ifdef ENABLE_TIMINGS
-        blk = ytask->timing_stack;
-        if (blk)
-            jl_timing_block_stop(blk);
-#endif
-        // backtraces don't survive task switches, see issue #12485
-        ptls->bt_size = 0;
-
-        // If the current task is not holding any locks, free the locks list
-        // so that it can be GC'd without leaking memory.
-        // TODO: this will be too slow!
-        arraylist_t *locks = &ytask->locks;
-        if (locks->len == 0  &&  locks->items != locks->_space) {
-            arraylist_free(locks);
-            arraylist_new(locks, 0);
-        }
-
-        // save state into yielding task
-        ytask->gcstack = ptls->pgcstack;
-        ytask->world_age = ptls->world_age;
-
-        // re-enqueue the task
-        if (requeue)
-            enqueue_task(ytask);
-    }
+    if (requeue)
+        enqueue_task(ptls->current_task);
 
     // run the next available task
     run_next();
-
-#ifdef ENABLE_TIMINGS
-    assert(blk == jl_current_task->timing_stack);
-    if (blk)
-        jl_timing_block_start(blk);
-#endif
 
     // yielding task (eventually) continues
     jl_value_t *exc = ptls->current_task->exception;
