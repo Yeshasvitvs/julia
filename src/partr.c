@@ -642,7 +642,8 @@ void NOINLINE JL_NORETURN start_task(void)
 static jl_task_t *get_next_task(void)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
-    jl_task_t *task;
+    jl_task_t *task = NULL;
+    JL_GC_PUSH1(&task);
 
     /* first check for sticky tasks */
     JL_LOCK(&ptls->sticky_taskq->lock);
@@ -666,6 +667,7 @@ static jl_task_t *get_next_task(void)
         }
     }
 
+    JL_GC_POP();
     return task;
 }
 
@@ -677,6 +679,7 @@ static int run_next(void)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
     jl_task_t *task = NULL;
+    JL_GC_PUSH1(&task);
 
     uint64_t spin_ns, spin_start = 0;
     while (!task) {
@@ -720,6 +723,7 @@ static int run_next(void)
 
     jl_switchto(&task);
 
+    JL_GC_POP();
     return 1;
 }
 
