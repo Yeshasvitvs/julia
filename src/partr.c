@@ -733,6 +733,7 @@ static void init_task(jl_task_t *task, size_t ssize)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
 
+    task->started = 0;
     task->storage = jl_nothing;
     task->state = runnable_sym;
     task->result = jl_nothing;
